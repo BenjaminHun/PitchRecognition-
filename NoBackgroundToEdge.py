@@ -16,10 +16,10 @@ blurKernel = 9
 
 
 # Path to the input video file
-input_video_path = 'Videos/no_background.mp4'
+input_video_path = 'E:/Videos/no_background.mp4'
 
 # Path to the output video file
-output_video_path = 'Videos/edge_detected.mp4'
+output_video_path = 'E:/Videos/edge_detected.mp4'
 
 # Open the video capture
 cap = cv2.VideoCapture(input_video_path)
@@ -120,6 +120,7 @@ def updateTrackedObject(originalFrame, currentTrackedObject, trackedObject):
 
 
 def finalizeTrackedObjects(trackedObjects):
+    trackedObjects[:] = [obj for obj in trackedObjects if obj.isAlive]
     for trackedObject in trackedObjects:
         trackedObject.final()
 
@@ -141,7 +142,9 @@ def addNewTrackedObjects(trackedObjects, originalFrame, currentTrackedObjects):
             id += 1
 
 
+i = 0
 while True:
+    print(i)
     ret, frame = cap.read()
     originalFrame = copy(frame)
 
@@ -183,9 +186,10 @@ while True:
     # Draw tracks on the image
     result = draw_tracks(originalFrame, trackedObjects)
     # Display the frame (optional)
-    cv2.imshow('Edge Detected Video', result)
+    # cv2.imshow('Edge Detected Video', result)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+    i += 1
 
 cap.release()
 out.release()
