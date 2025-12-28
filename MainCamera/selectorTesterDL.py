@@ -1,49 +1,42 @@
 import torch
 import torch.nn as nn
-import torchvision.transforms as transforms
+import torchvision.models as models
+import torchvision.transforms as T
+import torch.nn.functional as F
 from PIL import Image
 import cv2
 import os
 import math
 
-# --- Konfiguráció ---
-VIDEO_DIR = 'E:/MainCamera/test_videos' # A könyvtár, amiben a videók vannak
-MODEL_PATH = 'scene_selector_model.pth'  # A MainCamera/main.py által mentett modell
-OUTPUT_DIR = 'E:MainCamera/classified_frames_by_model/'
+# -----------------------------
+# KONFIGURÁCIÓ
+# -----------------------------
+VIDEO_PATH = 'E:/MainCamera/original_match_footage/raw_video.mkv' # A teljes meccsvideó elérési útja
+MODEL_PATH = 'scene_selector_model.pth'  # A tanított modell elérési útja
+OUTPUT_DIR = 'E:/MainCamera/classified_frames_by_model/'
 CLASS_NAMES = ['A', 'B']  # Az osztályok nevei, a modell kimenetének megfelelően
 
+# Feldolgozandó időintervallumok másodpercben (perc * 60 + másodperc)
+FIRST_HALF_START_SEC = 31 * 60 + 9
+FIRST_HALF_END_SEC = 78 * 60 + 8
+SECOND_HALF_START_SEC = 94 * 60 + 41
+SECOND_HALF_END_SEC = 144 * 60 + 7
 
-class SimpleCNN(nn.Module):
+
+def create_resnet_model(num_classes=2):
     """
-    A MainCamera/main.py fájlból átvett modell definíciója.
+    A tanító szkriptből átvett modell definíciója.
     Ennek pontosan meg kell egyeznie a betanított modell felépítésével.
     """
-    def __init__(self, num_classes=2):
-        super().__init__()
+    # Előtanított ResNet18 modell betöltése (súlyok nélkül, csak az architektúra kell)
+    # A load_state_dict fogja betölteni a mi finomhangolt súlyainkat.
+    model = models.resnet18(weights=None)
 
-        self.features = nn.Sequential(
-            nn.MaxPool2d(4),
-            nn.Conv2d(3, 16, 3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.Conv2d(16, 32, 3, padding=1, stride=2),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, 3, padding=1, stride=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-        )
+    # Az utolsó, teljesen összekötött réteg (classifier) cseréje
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, num_classes)
 
-        self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(64, num_classes)
-        )
-
-    def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
+    return model
 
 
 def main():
@@ -60,7 +53,7 @@ def main():
 
     # --- Modell betöltése ---
     print(f"Modell betöltése: {MODEL_PATH}")
-    model = SimpleCNN(num_classes=len(CLASS_NAMES))
+    model = create_resnet_model(num_classes=len(CLASS_NAMES))
     try:
         model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
     except FileNotFoundError:
@@ -72,45 +65,39 @@ def main():
     model.eval()  # A modellt 'evaluation' módba állítjuk
 
     # --- Kép-transzformációk definiálása ---
-    # FONTOS: Ezeknek meg kell egyezniük a MainCamera/main.py-ban használtakkal!
-    preprocess = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize((270, 480), antialias=True),
+    # FONTOS: Ezeknek meg kell egyezniük a tanító szkriptben használtakkal!
+    preprocess = T.Compose([
+        T.ToPILImage(),
+        T.Resize((256, 512), antialias=True),
+        T.ToTensor(),
+        # Normalizálás az ImageNet-en tanított modellekhez
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    # --- Videók keresése a könyvtárban ---
-    video_extensions = ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv')
+    # --- Videó feldolgozása ---
+    print(f"\n--- Feldolgozás indul: {os.path.basename(VIDEO_PATH)} ---")
+
     try:
-        video_files = [f for f in os.listdir(VIDEO_DIR) if f.lower().endswith(video_extensions)]
-    except FileNotFoundError:
-        print(f"Hiba: A megadott könyvtár nem található: {VIDEO_DIR}")
-        return
-
-    if not video_files:
-        print(f"Nem található videófájl a '{VIDEO_DIR}' könyvtárban.")
-        return
-
-    print(f"Talált videók: {len(video_files)} db")
-
-    # --- Videók feldolgozása egyenként ---
-    for video_filename in video_files:
-        video_path = os.path.join(VIDEO_DIR, video_filename)
-        print(f"\n--- Feldolgozás indul: {video_filename} ---")
-
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(VIDEO_PATH)
         if not cap.isOpened():
-            print(f"Hiba: A videó megnyitása sikertelen: {video_path}")
-            continue
+            raise IOError(f"A videó megnyitása sikertelen: {VIDEO_PATH}")
+    except FileNotFoundError:
+        print(f"Hiba: A videófájl nem található: {VIDEO_PATH}")
+        return
+    except IOError as e:
+        print(e)
+        return
 
+    try:
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps == 0:
             print("Hiba: A videó FPS értéke nem olvasható.")
-            cap.release()
-            continue
+            return
 
         # Kimeneti alkönyvtár létrehozása a videó nevével
-        video_output_dir = os.path.join(OUTPUT_DIR, os.path.splitext(video_filename)[0])
+        video_output_dir = os.path.join(OUTPUT_DIR, os.path.splitext(os.path.basename(VIDEO_PATH))[0])
         os.makedirs(video_output_dir, exist_ok=True)
+        print(f"A kimeneti képek a '{video_output_dir}' mappába kerülnek.")
 
         frame_number = 0
         while cap.isOpened():
@@ -118,33 +105,46 @@ def main():
             if not ret:
                 break  # A videó végére értünk
 
-            # Csak minden N-edik képkockát dolgozzuk fel, ami kb. 1 másodpercnek felel meg
-            if frame_number % math.ceil(fps) == 0:
-                timestamp_sec = frame_number / fps
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(frame_rgb)
+            timestamp_sec = frame_number / fps
 
-                input_tensor = preprocess(pil_image)
+            # Ellenőrizzük, hogy a képkocka a megadott időintervallumokba esik-e
+            is_in_first_half = FIRST_HALF_START_SEC <= timestamp_sec <= FIRST_HALF_END_SEC
+            is_in_second_half = SECOND_HALF_START_SEC <= timestamp_sec <= SECOND_HALF_END_SEC
+
+            # Csak akkor dolgozzuk fel, ha a megfelelő időintervallumban van,
+            # és kb. másodpercenként egy képkockát vizsgálunk.
+            if (is_in_first_half or is_in_second_half) and frame_number % math.ceil(fps) == 0:
+                
+                # Kép előfeldolgozása és klasszifikálása
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                input_tensor = preprocess(frame_rgb)
                 input_batch = input_tensor.unsqueeze(0).to(device)
 
                 with torch.no_grad():
                     output = model(input_batch)
+                    
+                    # Softmax-ot alkalmazunk a kimenetre, hogy valószínűségeket kapjunk
+                    probabilities = F.softmax(output, dim=1)
+                    
+                    # A legnagyobb valószínűség (bizonyosság) és a hozzá tartozó index (predikció)
+                    confidence, pred_idx = torch.max(probabilities, 1)
 
-                _, pred_idx = torch.max(output, 1)
                 predicted_class = CLASS_NAMES[pred_idx.item()]
-
-                filename = f"{timestamp_sec:.2f}s_{predicted_class}.jpg"
+                confidence_score = confidence.item()
+                
+                # Kép mentése a predikció és a bizonyosság alapján
+                filename = f"{timestamp_sec:.2f}s_{predicted_class}_conf_{confidence_score:.2f}.jpg"
                 output_path = os.path.join(video_output_dir, filename)
                 cv2.imwrite(output_path, frame)
-
             frame_number += 1
 
+    finally:
+        # Biztosítjuk, hogy a videó erőforrás mindig felszabaduljon, még hiba esetén is.
         cap.release()
 
     # --- Takarítás ---
     cv2.destroyAllWindows()
     print("Feldolgozás befejezve.")
-
 
 if __name__ == "__main__":
     main()
