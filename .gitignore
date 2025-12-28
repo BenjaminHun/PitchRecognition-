@@ -1,13 +1,7 @@
 desktop.ini
 .vscode/desktop.ini
 .vscode/settings.json
-__pycache__/CurrentTrackedObject.cpython-39.pyc
-__pycache__/CurrentTrackedObject.cpython-310.pyc
-__pycache__/CurrentTrackedObject.cpython-312.pyc
-__pycache__/desktop.ini
-__pycache__/TrackedObject.cpython-39.pyc
-__pycache__/TrackedObject.cpython-310.pyc
-__pycache__/TrackedObject.cpython-312.pyc
+__pycache__/
 Classes/desktop.ini
 Classes/__pycache__/CurrentTrackedObject.cpython-310.pyc
 Classes/__pycache__/desktop.ini
