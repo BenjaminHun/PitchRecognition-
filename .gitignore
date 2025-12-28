@@ -9,3 +9,4 @@ Classes/__pycache__/TrackedObject.cpython-310.pyc
 output/desktop.ini
 output/recognizedNumbers.txt
 Tests/desktop.ini
+*.pth
