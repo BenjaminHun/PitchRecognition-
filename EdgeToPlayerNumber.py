@@ -15,11 +15,6 @@ directory_path = 'E:/test/'
 testImage = "21_14.jpg"
 globalLabeledImagesIndex = 0
 imshowIndex = 0
-team1Lower_hsv = np.array([0, 0, 200])
-team1Upper_hsv = np.array([255, 50, 255])
-
-team2Lower_hsv = np.array([0, 0, 0])
-team2Upper_hsv = np.array([180, 255, 50])
 
 
 contourSizeHeightMin = 35
