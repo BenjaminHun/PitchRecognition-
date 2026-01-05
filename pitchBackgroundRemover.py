@@ -77,37 +77,45 @@ class PitchBackgroundRemover:
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         return mask
 
-    def remove_lines_and_noise(self, mask):
+    def remove_lines_and_noise(self, mask, kernel_size=7, min_area=50, sep_kernel_size=3):
         """
-        Eltávolítja a vonalakat és zajt egy robusztus morfológiai rekonstrukcióval.
-        Ez a módszer a "magokból" építi vissza a játékosokat, a vonalakat pedig elhagyja.
+        Eltávolítja a vonalakat és zajt gyors komponens-alapú szűréssel.
+        A módszer:
+        1. "Tisztított" maszk létrehozása (Separation): Kisebb nyitással szétválasztjuk a játékosokat a vonalaktól.
+        2. "Mag" keresése (Core Detection): Nagyobb nyitással megtaláljuk a biztos játékosokat.
+        3. Komponensek keresése a tisztított maszkon.
+        4. Csak azokat a komponenseket tartjuk meg, amelyeknek van "magja".
         """
-        # 1. "Mag" kép (marker) létrehozása:
-        # Egy erős nyitás (erózió -> dilatáció) eltünteti a vékony vonalakat,
-        # és csak a játékosok "vastag" magját hagyja meg.
-        # A kernel mérete kritikus: elég nagynak kell lennie, hogy a vonalakat eltüntesse,
-        # de elég kicsinek, hogy a távoli/kisebb játékosok magja megmaradjon.
-        anchor_kernel_size = 15
-        anchor_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (anchor_kernel_size, anchor_kernel_size))
-        marker = cv2.morphologyEx(mask, cv2.MORPH_OPEN, anchor_kernel)
+        # 1. "Tisztított" maszk létrehozása (Separation)
+        # Ez szétválasztja a játékost a vonaltól, ha épp összeérnek, és eltünteti a vékony vonalakat.
+        sep_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (sep_kernel_size, sep_kernel_size))
+        cleaned_mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, sep_kernel)
 
-        # 2. Rekonstrukció:
-        # A "mag"-ból (marker) kiindulva iteratívan "visszanövesztjük" az alakzatokat,
-        # de csak az eredeti maszk (mask) határain belül.
-        # A vonalak, mivel nincs magjuk, nem fognak rekonstruálódni.
-        recon_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        reconstructed = marker
-        while True:
-            dilated = cv2.dilate(reconstructed, recon_kernel)
-            reconstructed_new = cv2.bitwise_and(dilated, mask)
-            # Ha nincs változás, a rekonstrukció kész.
-            if np.array_equal(reconstructed, reconstructed_new):
-                break
-            reconstructed = reconstructed_new
-            
-        # Opcionális utótisztítás a kisebb zajokra, ha a rekonstrukció után maradnának.
-        final_mask = cv2.morphologyEx(reconstructed, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
-                
+        # 2. "Mag" keresése (Core Detection)
+        # A biztos játékos-blokkok megtalálása.
+        core_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        core_mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, core_kernel)
+
+        # 3. Connected Components a TISZTÍTOTT maszkon
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(cleaned_mask, connectivity=8)
+
+        # 4. Azoknak a label-eknek a kiválasztása, amelyek átfedésben vannak a "maggal"
+        valid_labels = np.unique(labels[core_mask == 255])
+        valid_labels = valid_labels[valid_labels != 0]  # 0 a háttér
+
+        # Opcionális: Terület alapú szűrés (zajszűrés)
+        valid_labels = [l for l in valid_labels if stats[l, cv2.CC_STAT_AREA] >= min_area]
+
+        # 5. Gyors maszk rekonstrukció Lookup Table (LUT) segítségével
+        lut = np.zeros(num_labels, dtype=np.uint8)
+        lut[valid_labels] = 255
+        final_mask = lut[labels]
+
+        # 6. Finomítás: Visszanövesztés az eredeti maszk határain belül
+        # Mivel a cleaned_mask kicsit kisebb lehet, egy enyhe dilatációval korrigálunk.
+        final_mask = cv2.dilate(final_mask, sep_kernel, iterations=1)
+        final_mask = cv2.bitwise_and(final_mask, mask)
+
         return final_mask
 
     def process(self):
@@ -135,20 +143,24 @@ class PitchBackgroundRemover:
             if contours:
                 largest_contour = max(contours, key=cv2.contourArea)
                 
-                contour_img = img.copy()
-                cv2.drawContours(contour_img, [largest_contour], -1, (0, 255, 0), 3)
-                cv2.imshow('Largest Contour', contour_img)
+                # 1. Pálya terület maszkja (ROI) - hogy a nézőteret kizárjuk
+                pitch_area_mask = np.zeros(img.shape[:2], dtype=np.uint8)
+                cv2.drawContours(pitch_area_mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
 
-                # Create mask from largest_contour
-                mask = np.zeros(img.shape[:2], dtype=np.uint8)
-                cv2.drawContours(mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
-                masked_img = cv2.bitwise_and(img, img, mask=mask)
-                x, y, w, h = cv2.boundingRect(largest_contour)
-                cropped_img = masked_img[y:y+h, x:x+w]
-                cv2.imshow('Cropped Result', cropped_img)
+                # 2. Előtér kinyerése: Ami NEM zöld (játékosok + vonalak) ÉS a pályán belül van
+                non_green_mask = cv2.bitwise_not(pitch_mask)
+                foreground_mask = cv2.bitwise_and(non_green_mask, pitch_area_mask)
 
-            #cv2.imshow('2. Blurred', blurred)
-            #cv2.imshow('3. Thresholded', thresh)
+                # 3. Vonalak eltávolítása morfológiai rekonstrukcióval
+                # Paraméterek hangolása:
+                # kernel_size: Növeld (pl. 9, 11), ha vastagabb vonalak maradnak. (Vigyázat: kis játékosok eltűnhetnek)
+                # sep_kernel_size: Növeld (pl. 3, 5), ha a vonalak "hozzáragadnak" a játékosokhoz.
+                # min_area: Növeld (pl. 100, 200), ha sok a kis zaj/pötty.
+                final_mask = self.remove_lines_and_noise(foreground_mask, kernel_size=5, min_area=200, sep_kernel_size=5)
+
+                # Eredmény megjelenítése
+                result_img = cv2.bitwise_and(img, img, mask=final_mask)
+                cv2.imshow('Players Only', result_img)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
