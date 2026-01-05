@@ -1,6 +1,7 @@
 from pitchBackgroundRemover import BackgroundRemoverConfig
 from pitchBackgroundRemover import PitchBackgroundRemover
 from videoTracker import VideoTracker
+from yoloPlayerDetector import YoloPlayerDetector
 
 def remove_background_segment(input_video_path):
     """Remove pitch background from a video segment."""
@@ -12,6 +13,14 @@ def remove_background_segment(input_video_path):
     config = BackgroundRemoverConfig(num_samples=10, epsilon_factor=0.005)
     remover = PitchBackgroundRemover(input_video_path, start_time, end_time, config)
     remover.process()
+
+def detect_players_yolo(input_video_path):
+    """Detect players using YOLOv8."""
+    start_time = 0 * 60 + 0
+    end_time = 3 * 60 + 0
+    
+    detector = YoloPlayerDetector(input_video_path, start_time, end_time, model_name='yolov8s.pt')
+    detector.process()
 
 def extract_contour_information():
     """Main entry point for the video tracking application."""
@@ -26,7 +35,8 @@ def extract_contour_information():
 def main():
     # Add meg itt a bemeneti videó elérési útját
     video_to_process = 'E:\\MainCamera\\test_videos\\raw_video-Scene-246.mp4'
-    remove_background_segment(video_to_process)
+    # remove_background_segment(video_to_process)
+    detect_players_yolo(video_to_process)
     #extract_contour_information()
 
 if __name__ == "__main__":
